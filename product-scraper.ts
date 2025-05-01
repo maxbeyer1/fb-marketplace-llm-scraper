@@ -53,14 +53,23 @@ const ProductSchema = z.object({
 type Product = z.infer<typeof ProductSchema>["product"];
 
 /**
- * Ensures the output directory exists
+ * Ensures the output directory exists with a timestamp subfolder
  */
 function ensureOutputDirectoryExists(): string {
-  const outputDir = path.join(process.cwd(), "output");
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const baseOutputDir = path.join(process.cwd(), "output");
+  const outputDir = path.join(baseOutputDir, timestamp);
+  
+  if (!fs.existsSync(baseOutputDir)) {
+    fs.mkdirSync(baseOutputDir, { recursive: true });
+    console.log("📁 Created base output directory");
+  }
+  
   if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
-    console.log("📁 Created output directory");
+    console.log(`📁 Created output directory for timestamp: ${timestamp}`);
   }
+  
   return outputDir;
 }
 
@@ -426,9 +435,8 @@ async function main() {
 
   // Prepare output filenames
   const outputPrefix = options.outputPrefix || "pc_listings";
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const jsonFilename = `${outputPrefix}-${timestamp}.json`;
-  const csvFilename = `${outputPrefix}-${timestamp}.csv`;
+  const jsonFilename = `${outputPrefix}.json`;
+  const csvFilename = `${outputPrefix}.csv`;
 
   try {
     const products = await scrapeProducts(urlsToScrape);
@@ -438,7 +446,7 @@ async function main() {
     const jsonPath = saveProductsToFile(products, outputDir, jsonFilename);
     const csvPath = saveProductsToCSV(products, outputDir, csvFilename);
     
-    console.log(`\n💾 Results saved to:\n  - ${path.basename(jsonPath)}\n  - ${path.basename(csvPath)}`);
+    console.log(`\n💾 Results saved to:\n  - ${jsonPath}\n  - ${csvPath}`);
     console.log("\n✨ Scraping complete!");
   } catch (error) {
     console.error("❌ Error in main execution:", error);
