@@ -197,6 +197,10 @@ dist
 
 ### Project-specific files ###
 
-# Output files
+# Output/input files
 output/
 model_tests/
+input.*
+
+# Example files
+example-urls.*

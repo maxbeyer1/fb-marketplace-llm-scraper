@@ -4,6 +4,7 @@ import { openai } from "@ai-sdk/openai";
 import LLMScraper from "llm-scraper";
 import dotenv from "dotenv";
 import fs from "fs";
+import path from "path";
 
 // Load environment variables
 dotenv.config();
@@ -52,11 +53,55 @@ const ProductSchema = z.object({
 type Product = z.infer<typeof ProductSchema>["product"];
 
 /**
+ * Ensures the output directory exists
+ */
+function ensureOutputDirectoryExists(): string {
+  const outputDir = path.join(process.cwd(), "output");
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+    console.log("📁 Created output directory");
+  }
+  return outputDir;
+}
+
+/**
+ * Read URLs from a file
+ * @param filePath Path to the file containing URLs
+ * @returns Array of URLs
+ */
+function readUrlsFromFile(filePath: string): string[] {
+  try {
+    const fileContent = fs.readFileSync(filePath, "utf-8");
+    
+    // Try to parse as JSON first
+    try {
+      const jsonData = JSON.parse(fileContent);
+      if (Array.isArray(jsonData)) {
+        return jsonData;
+      } else if (jsonData.urls && Array.isArray(jsonData.urls)) {
+        return jsonData.urls;
+      }
+    } catch {
+      // Not valid JSON, treat as text file with one URL per line
+      return fileContent
+        .split("\n")
+        .map(line => line.trim())
+        .filter(line => line.length > 0 && line.startsWith("http"));
+    }
+    
+    throw new Error("Could not parse input file format");
+  } catch (error) {
+    console.error(`❌ Error reading URLs file: ${error instanceof Error ? error.message : String(error)}`);
+    return [];
+  }
+}
+
+/**
  * Main function to process a list of product URLs
  * @param urls List of product URLs to process
  */
 async function scrapeProducts(urls: string[]): Promise<Product[]> {
-  console.log(`Starting to scrape ${urls.length} products...`);
+  console.log(`🔍 Starting to scrape ${urls.length} products...`);
 
   // Initialize LLM
   if (!process.env.OPENAI_API_KEY) {
@@ -77,7 +122,7 @@ async function scrapeProducts(urls: string[]): Promise<Product[]> {
     // Process URLs one by one with rate limiting
     for (let i = 0; i < urls.length; i++) {
       const url = urls[i];
-      console.log(`Processing URL ${i + 1}/${urls.length}: ${url}`);
+      process.stdout.write(`⏳ Processing URL ${i + 1}/${urls.length}... `);
 
       try {
         // Create a new context for each URL to avoid cookie/cache issues
@@ -95,6 +140,7 @@ async function scrapeProducts(urls: string[]): Promise<Product[]> {
         // Extract product information
         const product = await extractProductInfo(page, scraper, url);
         products.push(product);
+        console.log("✅ Done");
 
         // Close the context to clean up
         await context.close();
@@ -102,11 +148,10 @@ async function scrapeProducts(urls: string[]): Promise<Product[]> {
         // Add delay between requests to avoid rate limiting
         if (i < urls.length - 1) {
           const delay = Math.floor(Math.random() * 2000) + 1000; // 1-3 seconds
-          console.log(`Waiting ${delay}ms before next request...`);
           await new Promise((resolve) => setTimeout(resolve, delay));
         }
       } catch (error) {
-        console.error(`Error processing ${url}:`, error);
+        console.error(`❌ Failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
   } finally {
@@ -128,8 +173,6 @@ async function extractProductInfo(
   originalUrl: string
 ): Promise<Product> {
   try {
-    console.log("Extracting product information...");
-
     // Use LLM scraper to extract product details
     const { data } = await scraper.run(page, ProductSchema, {
       format: "markdown",
@@ -141,7 +184,6 @@ async function extractProductInfo(
       originalUrl,
     };
 
-    console.log("Product information extracted successfully");
     return product;
   } catch (error) {
     console.error("Error extracting product information:", error);
@@ -180,48 +222,72 @@ async function extractProductInfo(
  * @param products List of products to display
  */
 function displayProducts(products: Product[]): void {
-  console.log("\n=== PC LISTINGS COMPARISON ===\n");
-
-  products.forEach((product, index) => {
-    console.log(`Listing ${index + 1}: ${product.title}`);
-    console.log(`Price: ${product.price}`);
-    console.log(`Brand: ${product.brand}`);
-    console.log(`Model: ${product.model}`);
-    console.log(`CPU: ${product.cpu}`);
-    console.log(`RAM: ${product.ram}`);
-    console.log(`Storage: ${product.storage}`);
-    console.log(`Availability: ${product.availability}`);
-    console.log(`Quantity: ${product.quantity}`);
-    console.log(`Location: ${product.location}`);
-    console.log(`Description: ${product.description}`);
-    console.log(`Image URL: ${product.imageUrl}`);
-    console.log(`Original URL: ${product.originalUrl}`);
-    console.log("-----------------------------------");
-  });
+  console.log("\n📊 SCRAPING SUMMARY");
+  console.log(`Total listings processed: ${products.length}`);
+  
+  // Count successful extractions
+  const successful = products.filter(p => p.title !== "Extraction Failed").length;
+  console.log(`Successful extractions: ${successful}/${products.length}`);
+  
+  // Calculate price statistics if we have successful extractions
+  if (successful > 0) {
+    const prices = products
+      .map(p => p.price !== "Unknown" ? parseFloat(p.price.replace(/[^0-9.]/g, '')) : NaN)
+      .filter(price => !isNaN(price));
+      
+    if (prices.length > 0) {
+      const avgPrice = prices.reduce((sum, price) => sum + price, 0) / prices.length;
+      const minPrice = Math.min(...prices);
+      const maxPrice = Math.max(...prices);
+      
+      console.log(`Price range: $${minPrice.toFixed(2)} - $${maxPrice.toFixed(2)}`);
+      console.log(`Average price: $${avgPrice.toFixed(2)}`);
+    }
+  }
+  
+  // Display the first few items
+  const displayCount = Math.min(3, products.length);
+  if (displayCount > 0) {
+    console.log("\n📝 SAMPLE LISTINGS");
+    for (let i = 0; i < displayCount; i++) {
+      const p = products[i];
+      console.log(`\n#${i + 1}: ${p.title}`);
+      console.log(`💰 ${p.price} | 🖥️ ${p.brand} ${p.model}`);
+      console.log(`⚙️ CPU: ${p.cpu} | 🧠 RAM: ${p.ram} | 💾 Storage: ${p.storage}`);
+      console.log(`📍 ${p.location} | 🛒 ${p.availability}`);
+    }
+  }
+  
+  console.log("\n💾 Full details saved to output files");
 }
 
 /**
  * Save product information to a JSON file
  * @param products List of products to save
+ * @param outputDir Output directory
  * @param filename Output filename
  */
 function saveProductsToFile(
   products: Product[],
+  outputDir: string,
   filename: string = "pc_listings.json"
-): void {
-  fs.writeFileSync(filename, JSON.stringify(products, null, 2));
-  console.log(`Product information saved to ${filename}`);
+): string {
+  const fullPath = path.join(outputDir, filename);
+  fs.writeFileSync(fullPath, JSON.stringify(products, null, 2));
+  return fullPath;
 }
 
 /**
  * Save product information to a CSV file
  * @param products List of products to save
+ * @param outputDir Output directory
  * @param filename Output filename
  */
 function saveProductsToCSV(
   products: Product[],
+  outputDir: string,
   filename: string = "pc_listings.csv"
-): void {
+): string {
   // Define headers for CSV
   const headers = [
     "Title",
@@ -270,36 +336,112 @@ function saveProductsToCSV(
   ].join("\n");
 
   // Write to file
-  fs.writeFileSync(filename, csvContent);
-  console.log(`Product information saved to ${filename}`);
+  const fullPath = path.join(outputDir, filename);
+  fs.writeFileSync(fullPath, csvContent);
+  return fullPath;
+}
+
+/**
+ * Parse command line arguments
+ */
+function parseArgs() {
+  const args = process.argv.slice(2);
+  const options: {
+    inputFile?: string;
+    outputPrefix?: string;
+    showHelp: boolean;
+  } = {
+    showHelp: false,
+  };
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--input" || arg === "-i") {
+      options.inputFile = args[++i];
+    } else if (arg === "--output" || arg === "-o") {
+      options.outputPrefix = args[++i];
+    } else if (arg === "--help" || arg === "-h") {
+      options.showHelp = true;
+    }
+  }
+
+  return options;
+}
+
+/**
+ * Print usage instructions
+ */
+function printUsage(): void {
+  console.log("📋 FB Marketplace PC Scraper");
+  console.log("\nUsage: npm start -- [options]");
+  console.log("\nOptions:");
+  console.log("  --input, -i <file>   Path to file containing URLs to scrape");
+  console.log("  --output, -o <name>  Base name for output files (default: pc_listings)");
+  console.log("  --help, -h           Display this help message");
+  console.log("\nExamples:");
+  console.log("  npm start -- -i urls.txt");
+  console.log("  npm start -- -i urls.json -o gaming_pcs");
 }
 
 /**
  * Main execution function
  */
 async function main() {
+  // Parse command line arguments
+  const options = parseArgs();
+  
+  if (options.showHelp) {
+    printUsage();
+    return;
+  }
+  
+  console.log("🚀 FB Marketplace PC Scraper");
+  
+  // Ensure output directory exists
+  const outputDir = ensureOutputDirectoryExists();
+  
   // Example Facebook Marketplace URLs for PCs
-  // Note: These should be replaced with actual FB Marketplace URLs for PCs
   const exampleUrls = [
     "https://www.facebook.com/marketplace/item/3205154652960339/",
     "https://www.facebook.com/marketplace/item/664792412773207/",
     "https://www.facebook.com/marketplace/item/3856292544625767/",
   ];
 
-  // Check for command line arguments (URLs could be passed as arguments)
-  const args = process.argv.slice(2);
-  const urlsToScrape = args.length > 0 ? args : exampleUrls;
+  // Determine which URLs to scrape
+  let urlsToScrape: string[] = exampleUrls;
+  
+  if (options.inputFile) {
+    console.log(`📄 Reading URLs from ${options.inputFile}...`);
+    const urls = readUrlsFromFile(options.inputFile);
+    
+    if (urls.length > 0) {
+      urlsToScrape = urls;
+      console.log(`📋 Found ${urls.length} URLs to process`);
+    } else {
+      console.log("⚠️ No valid URLs found in input file. Using example URLs.");
+    }
+  } else {
+    console.log("ℹ️ No input file provided. Using example URLs.");
+  }
+
+  // Prepare output filenames
+  const outputPrefix = options.outputPrefix || "pc_listings";
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const jsonFilename = `${outputPrefix}-${timestamp}.json`;
+  const csvFilename = `${outputPrefix}-${timestamp}.csv`;
 
   try {
     const products = await scrapeProducts(urlsToScrape);
     displayProducts(products);
-    saveProductsToFile(products); // Save to JSON
-    saveProductsToCSV(products); // Save to CSV
-    console.log(
-      "\nScraping complete. Results saved to pc_listings.json and pc_listings.csv"
-    );
+    
+    // Save results to files
+    const jsonPath = saveProductsToFile(products, outputDir, jsonFilename);
+    const csvPath = saveProductsToCSV(products, outputDir, csvFilename);
+    
+    console.log(`\n💾 Results saved to:\n  - ${path.basename(jsonPath)}\n  - ${path.basename(csvPath)}`);
+    console.log("\n✨ Scraping complete!");
   } catch (error) {
-    console.error("Error in main execution:", error);
+    console.error("❌ Error in main execution:", error);
   }
 }
 
