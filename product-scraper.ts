@@ -1,6 +1,8 @@
 import { chromium, Page } from "playwright";
 import { z } from "zod";
 import { openai } from "@ai-sdk/openai";
+// Uncomment to use Gemini
+// import { google } from "@ai-sdk/google";
 import LLMScraper from "llm-scraper";
 import dotenv from "dotenv";
 import fs from "fs";
@@ -20,7 +22,7 @@ const ProductSchema = z.object({
     brand: z
       .string()
       .describe("The brand of the PC (e.g., Dell, HP, Lenovo, Custom)"),
-    model: z.string().describe("The model of the PC if available"),
+    model: z.string().nullish().describe("The model of the PC if available (e.g., M920q Tiny, EliteBook 800 G3, etc.)"),
     cpu: z
       .string()
       .describe(
@@ -34,8 +36,8 @@ const ProductSchema = z.object({
       ),
 
     // FB Marketplace specific fields
-    availability: z.string().describe("Whether the item is available or sold"),
-    quantity: z.string().describe("The quantity available if specified"),
+    availability: z.string().nullish().describe("Whether the item is available or sold"),
+    quantity: z.string().nullish().describe("The quantity available if specified"),
     location: z.string().describe("The location of the seller"),
     description: z
       .string()
@@ -113,11 +115,21 @@ async function scrapeProducts(urls: string[]): Promise<Product[]> {
   console.log(`🔍 Starting to scrape ${urls.length} products...`);
 
   // Initialize LLM
+
+  // Comment out if not using OpenAI
   if (!process.env.OPENAI_API_KEY) {
     throw new Error("OPENAI_API_KEY environment variable is not set");
   }
+  const llm = openai.chat("gpt-4.1-nano");
 
-  const llm = openai.chat("gpt-4.1-mini");
+  // Uncomment below to use Gemini
+  // if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+  //   throw new Error("GOOGLE_GENERATIVE_AI_API_KEY environment variable is not set");
+  // }
+  // const llm = google("gemini-2.0-flash-lite", {
+  //   structuredOutputs: false,
+  // });
+
   const scraper = new LLMScraper(llm);
 
   // Launch browser
